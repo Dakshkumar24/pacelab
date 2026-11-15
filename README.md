@@ -211,7 +211,7 @@ Issues and pull requests are welcome. Keep the threshold the only difference bet
 
 ## License
 
-MIT; see [LICENSE](LICENSE). The LICENSE file came from the Cloudflare starter template and still names "Cloudflare Inc." as copyright holder; the project owner should confirm the intended holder.
+MIT; see [LICENSE](LICENSE). Copyright Daksh Kumar. The original Cloudflare Inc. notice is kept for the parts that came from the `cloudflare/agents-starter` template, as the MIT license requires.
 
 ## Privacy
 
