@@ -27,7 +27,8 @@ import {
   sessionCookie,
   verifyToken
 } from "./lib/auth";
-import { type Trial, trialsToCsv } from "./lib/trial";
+import { type Trial, trialsToCsv, validateTrial } from "./lib/trial";
+import { buildReport } from "./lib/report";
 
 // Diagnostics forward the server's pipeline events (speech.started, stt.interim,
 // stt.utterance, model.*, tts.*) to the browser console. On while the voice
@@ -216,7 +217,11 @@ export class TrialStore extends Agent<Env> {
     }
 
     if (request.method === "POST" && action === "trial") {
-      const trial = (await request.json()) as Trial;
+      const parsed = validateTrial(await request.json().catch(() => null));
+      if (typeof parsed === "string") {
+        return Response.json({ error: parsed }, { status: 400 });
+      }
+      const trial = parsed;
       this.sql`
         INSERT OR REPLACE INTO trials (id, created_at, mode, scenario, run, payload)
         VALUES (
@@ -229,6 +234,10 @@ export class TrialStore extends Agent<Env> {
 
     if (request.method === "GET" && action === "trials") {
       return Response.json({ trials: this.all() });
+    }
+
+    if (request.method === "GET" && action === "report") {
+      return Response.json(buildReport(this.all()));
     }
 
     if (request.method === "DELETE" && action === "trials") {
@@ -404,7 +413,7 @@ export default {
       const action = url.pathname.split("/").pop() ?? "";
       const allowed =
         (request.method === "GET" &&
-          ["usage", "trials", "export"].includes(action)) ||
+          ["usage", "trials", "export", "report"].includes(action)) ||
         (request.method === "POST" && action === "trial") ||
         (request.method === "DELETE" && action === "trials");
       if (!allowed) {
