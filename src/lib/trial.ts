@@ -1,17 +1,18 @@
 /**
  * The trial record. One row per scripted request spoken to one mode.
  *
- * Timing fields come from the SDK's server-clock metrics only. Nothing here is
- * derived from browser timestamps, so no approximate number is ever reported as
- * a precise latency. Tier 2 adds clip-relative delays measured from a known
- * speech-end mark.
+ * Three kinds of number live here, and the report never mixes them:
+ *   - SDK timings: measured by the Agents SDK on the server clock.
+ *   - Manual labels: judged by the person running the trial.
+ *   - Approximate perceived wait: measured on the browser clock from the
+ *     microphone level, so it is labelled approximate everywhere it appears.
  */
 
 export type Mode = "standard" | "patient";
 
 /** Manual judgments. The report marks every one of these as manual. */
 export interface TrialLabels {
-  /** Speaker pressed "cut me off": the agent replied before the request was finished. */
+  /** The agent replied before the request was finished ("cut me off"). */
   prematureInterruption: boolean;
   /** Transcript captured the key intent and details. Exact wording not required. */
   transcriptionCorrect: boolean;
@@ -19,23 +20,36 @@ export interface TrialLabels {
   responseAppropriate: boolean;
 }
 
-/** SDK-measured timings. All optional: a field is absent when its landmark was not reached. */
+/**
+ * SDK timings for the first completed speech turn of the trial, the turn the
+ * agent answered first. All optional: a field is absent when its landmark was
+ * not reached.
+ */
 export interface TrialTimings {
-  /** turn_metrics: Flux speech start to the finalized transcript. */
+  /** Flux speech start to the finalized transcript. Includes speaking time and pauses. */
   speechStartToFinalMs?: number;
-  /** turn_metrics: finalized input to the first server audio send. */
-  finalInputToFirstAudioMs?: number;
-  /** turn_metrics: model invocation to the first text delta. */
+  /** Time in the server's afterTranscribe hook. */
+  afterTranscribeMs?: number;
+  /** Model invocation to the first text delta. */
   modelToFirstTextMs?: number;
-  /** turn_metrics: turn allocation to terminal summary. */
+  /** First TTS invocation to the first audio sent. */
+  ttsToFirstAudioMs?: number;
+  /** Finalized transcript to the first audio sent by the server. */
+  finalInputToFirstAudioMs?: number;
+  /** Turn allocation to terminal summary. */
   turnTotalMs?: number;
-  /** turn_metrics: terminal outcome for the turn. */
+  /** Terminal outcome for the turn. */
   outcome?: string;
-  /** metrics: pipeline totals, all excluding STT and browser playback. */
-  llmMs?: number;
-  ttsMs?: number;
-  firstAudioMs?: number;
-  totalMs?: number;
+}
+
+/**
+ * Browser-clock estimate of what the speaker experienced: from the last moment
+ * the microphone level was above the voice threshold before the turn was
+ * committed, to the first agent audio arriving at the browser. Approximate:
+ * breaths and room noise move the speech-end estimate.
+ */
+export interface PerceivedTiming {
+  approxSpeechEndToFirstAudioMs?: number;
 }
 
 export interface Trial {
@@ -44,25 +58,28 @@ export interface Trial {
   mode: Mode;
   /** Scenario number, 1-6. */
   scenario: number;
-  /** Run number within this scenario and mode, 1-2. */
+  /** Run number within this scenario and mode. */
   run: number;
-  /** The threshold actually in force, recorded so the CSV is self-describing. */
+  /** The threshold actually in force, so the CSV is self-describing. */
   eotThreshold: number;
   /** Durable Object instance name, proving session isolation. */
   instanceName: string;
   /** Committed user transcripts, in order. More than one means the request was split. */
   userTranscripts: string[];
-  /** The agent's spoken reply text. */
+  /** The agent's first spoken reply. */
   agentReply: string;
-  /** Count of committed user turns. Greater than 1 is a measured premature split. */
+  /** Committed user turns before the agent's first reply. Greater than 1 is a measured split. */
   turnCount: number;
   labels: TrialLabels;
   timings: TrialTimings;
-  /** A sendText() correction was needed. */
+  perceived: PerceivedTiming;
+  /** A typed correction (sendText) was needed. */
   repaired: boolean;
   /** Excluded from the batch, e.g. a connection error. Kept with its reason. */
   excluded: boolean;
   excludedReason: string;
+  /** Exploratory runs are kept but never counted in the batch report. */
+  exploratory: boolean;
   notes: string;
 }
 
@@ -72,15 +89,14 @@ export interface Trial {
  */
 export function isSuccessfulTurn(t: Trial): boolean {
   return (
-    !t.labels.prematureInterruption &&
-    t.turnCount === 1 &&
+    !isPremature(t) &&
     t.labels.transcriptionCorrect &&
     !t.repaired &&
     t.labels.responseAppropriate
   );
 }
 
-/** Premature by either route: the manual label, or the SDK splitting one request into several turns. */
+/** Premature by either route: the manual label, or the SDK splitting the request. */
 export function isPremature(t: Trial): boolean {
   return t.labels.prematureInterruption || t.turnCount > 1;
 }
@@ -92,25 +108,25 @@ export const CSV_COLUMNS = [
   "eot_threshold",
   "scenario",
   "run",
+  "exploratory",
+  "excluded",
+  "excluded_reason",
   "instance_name",
-  "turn_count",
+  "turn_count_sdk",
   "premature_manual",
   "premature_any",
   "transcription_correct_manual",
   "response_appropriate_manual",
   "repaired",
   "successful_turn",
-  "speech_start_to_final_ms",
-  "final_input_to_first_audio_ms",
-  "model_to_first_text_ms",
-  "turn_total_ms",
-  "turn_outcome",
-  "llm_ms",
-  "tts_ms",
-  "first_audio_ms",
-  "total_ms",
-  "excluded",
-  "excluded_reason",
+  "sdk_speech_start_to_final_ms",
+  "sdk_after_transcribe_ms",
+  "sdk_model_to_first_text_ms",
+  "sdk_tts_to_first_audio_ms",
+  "sdk_final_input_to_first_audio_ms",
+  "sdk_turn_total_ms",
+  "sdk_turn_outcome",
+  "approx_perceived_wait_ms",
   "user_transcripts",
   "agent_reply",
   "notes"
@@ -133,6 +149,9 @@ export function trialsToCsv(trials: Trial[]): string {
         t.eotThreshold,
         t.scenario,
         t.run,
+        t.exploratory,
+        t.excluded,
+        t.excludedReason,
         t.instanceName,
         t.turnCount,
         t.labels.prematureInterruption,
@@ -142,16 +161,13 @@ export function trialsToCsv(trials: Trial[]): string {
         t.repaired,
         isSuccessfulTurn(t),
         t.timings.speechStartToFinalMs,
-        t.timings.finalInputToFirstAudioMs,
+        t.timings.afterTranscribeMs,
         t.timings.modelToFirstTextMs,
+        t.timings.ttsToFirstAudioMs,
+        t.timings.finalInputToFirstAudioMs,
         t.timings.turnTotalMs,
         t.timings.outcome,
-        t.timings.llmMs,
-        t.timings.ttsMs,
-        t.timings.firstAudioMs,
-        t.timings.totalMs,
-        t.excluded,
-        t.excludedReason,
+        t.perceived?.approxSpeechEndToFirstAudioMs,
         t.userTranscripts.join(" | "),
         t.agentReply,
         t.notes
@@ -161,4 +177,41 @@ export function trialsToCsv(trials: Trial[]): string {
     );
   }
   return `${rows.join("\n")}\n`;
+}
+
+/** Reject anything that is not a well-formed trial before it reaches storage. */
+export function validateTrial(input: unknown): Trial | string {
+  if (!input || typeof input !== "object") return "body must be an object";
+  const t = input as Partial<Trial>;
+  if (typeof t.id !== "string" || !/^[\w-]{8,64}$/.test(t.id)) return "bad id";
+  if (t.mode !== "standard" && t.mode !== "patient") return "bad mode";
+  if (!Number.isInteger(t.scenario) || t.scenario! < 1 || t.scenario! > 6) return "bad scenario";
+  if (!Number.isInteger(t.run) || t.run! < 1 || t.run! > 99) return "bad run";
+  if (!t.labels || typeof t.labels !== "object") return "missing labels";
+  if (!Array.isArray(t.userTranscripts)) return "missing transcripts";
+  if (JSON.stringify(input).length > 20_000) return "trial too large";
+  return {
+    id: t.id,
+    createdAt: Number(t.createdAt) || Date.now(),
+    mode: t.mode,
+    scenario: t.scenario!,
+    run: t.run!,
+    eotThreshold: Number(t.eotThreshold),
+    instanceName: String(t.instanceName ?? ""),
+    userTranscripts: t.userTranscripts.map(String).slice(0, 20),
+    agentReply: String(t.agentReply ?? ""),
+    turnCount: Number(t.turnCount) || 0,
+    labels: {
+      prematureInterruption: Boolean(t.labels.prematureInterruption),
+      transcriptionCorrect: Boolean(t.labels.transcriptionCorrect),
+      responseAppropriate: Boolean(t.labels.responseAppropriate)
+    },
+    timings: t.timings ?? {},
+    perceived: t.perceived ?? {},
+    repaired: Boolean(t.repaired),
+    excluded: Boolean(t.excluded),
+    excludedReason: String(t.excludedReason ?? ""),
+    exploratory: Boolean(t.exploratory),
+    notes: String(t.notes ?? "").slice(0, 1000)
+  };
 }
