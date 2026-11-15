@@ -42,7 +42,7 @@ Answers come from the installed package's type definitions and compiled source (
 - **Expected:** The starter to use the current recommended provider.
 - **Happened:** The package README says it is deprecated in favor of `createAI` from `agents/models/ai-sdk`. The starter template and its `ai` v6 pin predate that.
 - **Severity:** Low. It still works.
-- **Fix:** Phase 2 uses `createAI({ binding: env.AI })` and drops `workers-ai-provider`. The starter should do the same.
+- **Fix:** Phase 2 uses `createAI({ binding: env.AI })` and does not import `workers-ai-provider`. The package stays in `package.json` only so the committed lock file stays in sync. The starter should switch to `createAI`.
 
 ### F5. Local dev cannot start without a Cloudflare login
 - **Tried:** `npm run dev` on a fresh checkout with no Cloudflare credentials.
@@ -50,6 +50,44 @@ Answers come from the installed package's type definitions and compiled source (
 - **Happened:** The dev server exits at startup: the `AI` binding is always remote, and the remote proxy session needs `wrangler login` or `CLOUDFLARE_API_TOKEN`. With the binding removed, the page, `/api/health` and all three agent WebSocket routes work.
 - **Severity:** Medium. A day-two developer cannot see anything before authenticating, and CI or sandboxed environments cannot run the app at all.
 - **Fix:** Start the dev server without the remote session and fail only on the first `env.AI` call, with a message naming `wrangler login`.
+
+### F6. Gemma 4 reasons silently by default, which looks like a broken voice pipeline
+- **Tried:** `streamText` through `createAI({ binding })` with `@cf/google/gemma-4-26b-a4b-it`, the same way as any chat model.
+- **Expected:** First text in about a second, as a voice turn needs.
+- **Happened:** First visible text came 5–21 s after the transcript. The model spends that time on hidden reasoning before it writes anything. During the wait, any Flux speech start (see F7) aborted the turn, so the user saw their own transcripts and never got a reply. Nothing in the logs pointed at the model.
+- **Severity:** High. It cost a debugging session, and a developer would blame STT or TTS first.
+- **Fix:** Pass `reasoningEffort: null` in the model options. After that, first text took 1.25–2.65 s in our runs. Voice docs and examples that use a reasoning model should set it, or the voice helper should default it.
+
+### F7. Any Flux speech start aborts the agent's turn, with no option to change it
+- **Tried:** Looked for a way to ignore short noises while the agent is thinking or speaking.
+- **Expected:** A barge-in setting, such as a minimum speech length or off.
+- **Happened:** Every Flux `StartOfTurn` goes to `_handleBargeIn`, which aborts the active turn. This includes false starts on near-silence (F8) and the user saying "hello?" while waiting for a slow model (F6). There is no config option.
+- **Severity:** Medium–High. A false barge-in looks like a turn-taking failure, and it confounds any threshold comparison.
+- **Fix:** A barge-in option: off, a minimum speech duration, or only after an interim transcript arrives.
+
+### F8. Flux sometimes opens a turn on near-silence
+- **Tried:** Probes that streamed low-level noise between utterances, and the user's first live calls.
+- **Expected:** No speech events without speech.
+- **Happened:** Flux occasionally reported speech start with no one talking, and short fragments appeared in the user's first live test. Observed, not counted. With F7, each false start can cut off a reply.
+- **Severity:** Medium.
+- **Fix:** Document expected behavior on noise. Pairs with the F7 option.
+
+### F9. Flux closes its socket after about 5 s without audio
+- **Tried:** A probe that sent nothing between utterances.
+- **Expected:** The STT session to stay open for the whole call.
+- **Happened:** The Flux connection dropped after about 5 s of no audio, and the call ended. The browser client streams the mic continuously, so normal calls are mostly unaffected. A muted mic or a stalled audio stream would end the call the same way. We have not confirmed this case in a real browser.
+- **Severity:** Medium.
+- **Fix:** Send keep-alive silence in the server's STT session, or document the limit.
+
+### F10. `speechStartToFinalMs` reads like latency but isn't
+- **Tried:** Used `turn_metrics` to compare how long each mode makes the user wait.
+- **Expected:** A metric for the end-of-turn wait after the user stops speaking.
+- **Happened:** `speechStartToFinalMs` runs from speech start to the final transcript, so it includes speaking time and every pause. One Patient trial read 6858 ms, mostly the user talking. No SDK metric isolates the wait after the last word.
+- **Severity:** Medium. It is the number a PM would quote, and it is the wrong one.
+- **Fix:** Add a `speechEndToFinalMs` (last speech end → final) to `turn_metrics`, and document what `speechStartToFinalMs` covers.
+
+### Environment note (not SDK friction)
+The built-in browser pane in the Claude desktop app does not grant microphone access, so live calls run in a normal browser.
 
 ## Phase 1 compatibility check (agents@0.33.0)
 
@@ -63,4 +101,4 @@ Verified by compiling a probe file against the installed packages and by `wrangl
 | TTS | `WorkersAITTS` defaults to `@cf/deepgram/aura-1`, speaker `asteria`; not being retired |
 | SDK metrics | `metrics` (`llm_ms`, `tts_ms`, `first_audio_ms`, `total_ms`) and `turn_metrics` (`speechStartToFinalMs`, `finalInputToFirstAudioMs`, `modelToFirstTextMs`, ...) exposed on `useVoiceAgent` |
 | Durable Object config | Dry run resolves `StandardVoiceAgent`, `PatientVoiceAgent`, `TrialStore` and the `AI` binding; one `v1` migration with all three in `new_sqlite_classes` |
-| Live voice call | **Not tested.** Needs a Cloudflare login |
+| Live voice call | Working in both modes since 2026-11-15, after the F6 fix (probe and live microphone) |
