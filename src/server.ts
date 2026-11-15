@@ -77,7 +77,13 @@ abstract class PaceVoiceAgent extends VoiceAgent<Env> {
   async onTurn(transcript: string, context: VoiceTurnContext) {
     const ai = createAI({ binding: this.env.AI });
     const result = streamText({
-      model: ai(LLM_MODEL, { sessionAffinity: this.sessionAffinity }),
+      // Gemma 4 reasons silently before its first word by default: 5-21 s in
+      // live tests, long enough for any new speech to barge in and abort the
+      // reply. A spoken scheduling answer needs no reasoning, so turn it off.
+      model: ai(LLM_MODEL, {
+        sessionAffinity: this.sessionAffinity,
+        reasoningEffort: null
+      }),
       system: SYSTEM_PROMPT,
       messages: [
         ...context.messages.map((m) => ({
