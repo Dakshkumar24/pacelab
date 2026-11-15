@@ -29,7 +29,10 @@ import {
 } from "./lib/auth";
 import { type Trial, trialsToCsv } from "./lib/trial";
 
-const VoiceAgent = withVoice(Agent);
+// Diagnostics forward the server's pipeline events (speech.started, stt.interim,
+// stt.utterance, model.*, tts.*) to the browser console. On while the voice
+// pipeline is being brought up; the app is gated, so only signed-in sessions see them.
+const VoiceAgent = withVoice(Agent, { diagnostics: { browserConsole: true } });
 
 /**
  * Shared base for both modes: prompt, LLM and voice.
