@@ -33,11 +33,22 @@ export const AGENT_FOR_MODE: Record<Mode, string> = {
 
 // --- Safeguards on Workers AI spend -----------------------------------------
 
-/** Calls allowed per UTC day across both modes. 24 trials plus retries. */
-export const DAILY_CALL_CAP = 40;
+/** Calls allowed per UTC day across both modes. 24 trials plus a few retries. */
+export const DAILY_CALL_CAP = 30;
 
 /** A call is force-ended after this long, so a forgotten tab cannot bill all day. */
-export const MAX_CALL_MS = 120_000;
+export const MAX_CALL_MS = 90_000;
 
-/** How long an access token stays valid after the passphrase is accepted. */
+/** How long a session stays valid after the passphrase is accepted. */
 export const TOKEN_TTL_MS = 60 * 60 * 1000;
+
+/** Name of the session cookie. The token never appears in a URL. */
+export const SESSION_COOKIE = "pacelab_session";
+
+// --- Brute-force protection on the passphrase --------------------------------
+
+/** Failed passphrase attempts allowed from one client within the window. */
+export const AUTH_MAX_FAILURES = 8;
+
+/** Window those failures are counted over, and the lockout length. */
+export const AUTH_WINDOW_MS = 15 * 60 * 1000;
