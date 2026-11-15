@@ -1,50 +1,54 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EOT_THRESHOLD, type Mode, MODES } from "../config";
-import { canEnd, canStart, PHASE_LABEL } from "../lib/callMachine";
-import type { Slot } from "../lib/experiment";
-import type { Usage } from "../lib/quota";
-import { buildReport } from "../lib/report";
+import { canEnd, canStart, type CallPhase, PHASE_LABEL } from "../lib/callMachine";
+import { countedIn, PLAN_MODES, REPEATS } from "../lib/experiment";
 import { scenarioById, SCENARIOS } from "../lib/scenarios";
-import type { Trial } from "../lib/trial";
-import { Matrix, ReportView } from "./Report";
+import { MOCK_CAPTURE, MOCK_LIVE, MOCK_SCENARIO, mockKind } from "./devMock";
 import { FailureCard, LabelForm, MODE_NAME, ScriptGuide, summarize, Tag } from "./parts";
+import type { LabData } from "./useLabData";
 import { type Capture, useCall } from "./useCall";
+import { MicMeter } from "./visuals";
 
 function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-export function Workbench({ onExpired }: { onExpired: () => void }) {
+function ms(v: number | undefined): string {
+  return v === undefined ? "—" : `${v} ms`;
+}
+
+/** What the session is doing right now, from real call state only. */
+function signal(phase: CallPhase, level: number, silenceSince: number | null) {
+  if (phase === "responding") return 3;
+  if (phase !== "listening") return -1;
+  if (level >= 0.04) return 1;
+  if (silenceSince !== null) return 2;
+  return 0;
+}
+
+const SIGNALS = ["Listening", "You're speaking", "Pause held", "Agent replying"];
+
+export function Workbench({
+  lab,
+  onExpired,
+  goResults
+}: {
+  lab: LabData;
+  onExpired: () => void;
+  goResults: () => void;
+}) {
+  const { trials, usage, report, refresh, loadError } = lab;
+  const mock = import.meta.env.DEV ? mockKind() : null;
   const [mode, setMode] = useState<Mode>("standard");
-  const [scenarioId, setScenarioId] = useState(1);
+  const [scenarioId, setScenarioId] = useState(() => (mock ? MOCK_SCENARIO : 1));
   const [autoEnd, setAutoEnd] = useState(true);
-  const [usage, setUsage] = useState<Usage | null>(null);
-  const [trials, setTrials] = useState<Trial[] | null>(null);
-  const [pending, setPending] = useState<Capture | null>(null);
+  const [pending, setPending] = useState<Capture | null>(() => (mock === "label" ? MOCK_CAPTURE : null));
   const [toast, setToast] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [correction, setCorrection] = useState("");
-  const [confirmText, setConfirmText] = useState("");
-  const [followPlan, setFollowPlan] = useState(true);
+  const [followPlan, setFollowPlan] = useState(!mock);
+  const labelRef = useRef<HTMLDivElement>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [u, t] = await Promise.all([fetch("/api/usage"), fetch("/api/trials")]);
-      if (u.status === 401 || t.status === 401) return onExpired();
-      if (!u.ok || !t.ok) throw new Error();
-      setUsage((await u.json()) as Usage);
-      setTrials(((await t.json()) as { trials: Trial[] }).trials);
-      setLoadError(null);
-    } catch {
-      setLoadError("Could not load saved trials. Check your connection and reload.");
-    }
-  }, [onExpired]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const call = useCall({
+  const real = useCall({
     autoEnd,
     onSessionExpired: onExpired,
     onSettled: (capture) => {
@@ -53,9 +57,8 @@ export function Workbench({ onExpired }: { onExpired: () => void }) {
       setTimeout(() => void refresh(), 800);
     }
   });
+  const call = mock === "live" ? { ...real, ...MOCK_LIVE, live: true, state: { ...real.state, phase: MOCK_LIVE.phase } } : real;
 
-  // The report is computed from the same trials the page lists, with the same code the server uses.
-  const report = useMemo(() => buildReport(trials ?? []), [trials]);
   const next = report.progress.next;
 
   // Follow the planned order until the person picks something else.
@@ -66,339 +69,385 @@ export function Workbench({ onExpired }: { onExpired: () => void }) {
     }
   }, [followPlan, next, pending, call.state]);
 
+  // Bring the labeling panel into view when a call ends.
+  useEffect(() => {
+    if (pending && !mock) labelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [pending, mock]);
+
   const scenario = scenarioById(scenarioId) ?? SCENARIOS[0];
   const phase = call.state.phase;
-  const busy = !canStart(call.state);
+  const busy = !canStart(call.state) && mock !== "live";
+  const locked = busy || !!pending;
   const onPlan = next?.scenario === scenarioId && next.mode === mode;
   const callsLeft = usage ? usage.cap - usage.used : null;
-
-  function pick(slot: Slot) {
-    if (busy || pending) return;
-    setFollowPlan(false);
-    setMode(slot.mode);
-    setScenarioId(slot.scenario);
-  }
+  const active = signal(phase, call.audioLevel, call.silenceSince);
+  const lines = call.lines.length ? call.lines : (pending?.lines ?? []);
+  const timings = pending ? summarize(pending).turn : undefined;
+  const progressPct = Math.round((report.progress.valid / report.progress.planned) * 100);
 
   function done(message: string) {
     setPending(null);
     setToast(message);
     setFollowPlan(true);
-    call.reset();
+    real.reset();
     void refresh();
   }
 
   function dismiss() {
     setPending(null);
-    call.reset();
+    real.reset();
   }
 
-  async function exclude(trial: Trial) {
-    const reason = window.prompt("Why should this trial be excluded? (a few words)");
-    if (!reason) return;
-    const res = await fetch("/api/trial-status", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: trial.id, status: "excluded", statusReason: reason })
-    });
-    if (res.status === 401) return onExpired();
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    setToast(res.ok ? "Trial excluded. Its planned run is open again." : (data.error ?? "Could not exclude the trial."));
-    void refresh();
-  }
-
-  async function deleteAll() {
-    const res = await fetch("/api/trials", {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ confirm: confirmText })
-    });
-    if (res.status === 401) return onExpired();
-    const data = (await res.json().catch(() => ({}))) as { error?: string; archived?: number };
-    setToast(res.ok ? `${data.archived} trials removed from the report and archived.` : (data.error ?? "Delete failed."));
-    setConfirmText("");
-    void refresh();
-  }
-
-  const showFailure =
-    pending && (summarize(pending).userTranscripts.join("").trim() === "");
-  const deletePhrase = `DELETE ${trials?.length ?? 0} TRIALS`;
+  const showFailure = pending && summarize(pending).userTranscripts.join("").trim() === "";
 
   return (
-    <>
+    <div className="container page">
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">Workbench</p>
+          <h1 className="h-page">Run a trial</h1>
+        </div>
+        <dl className="mini-stats">
+          <div>
+            <dt>Counted</dt>
+            <dd>
+              {report.progress.valid}
+              <small>/{report.progress.planned}</small>
+            </dd>
+          </div>
+          <div>
+            <dt>Calls left today</dt>
+            <dd>
+              {callsLeft ?? "–"}
+              <small>/{usage?.cap ?? 30}</small>
+            </dd>
+          </div>
+          <div>
+            <dt>
+              Neurons used <Tag kind={"≈"} />
+            </dt>
+            <dd>
+              {usage ? `${Math.round(usage.estimatedNeurons / 100) / 10}k` : "–"}
+              <small>/10k</small>
+            </dd>
+          </div>
+          <div>
+            <dt>Technical failures</dt>
+            <dd>{report.progress.technicalFailures}</dd>
+          </div>
+        </dl>
+      </header>
+
+      {mock ? (
+        <div className="banner banner-mock" role="note">
+          <span>
+            <strong>Mocked {mock === "live" ? "live session" : "finished call"}.</strong> Development
+            preview with invented data: no microphone, no model, nothing is saved.
+          </span>
+        </div>
+      ) : null}
       {usage?.providerExhausted ? (
-        <div className="banner warn" role="status">
+        <div className="banner banner-warn" role="status">
           <strong>Workers AI's free allocation for today is used up.</strong> Calls will fail to
           start until it resets at {clockTime(usage.resetsAt)} your time (00:00 UTC). Failed starts
           do not use call slots.
         </div>
       ) : null}
       {toast ? (
-        <div className="banner ok" role="status">
-          {toast}{" "}
-          <button type="button" className="link" onClick={() => setToast(null)}>
-            Dismiss
-          </button>
+        <div className="banner banner-ok" role="status">
+          <span>{toast}</span>
+          <span className="banner-actions">
+            <button type="button" className="link" onClick={goResults}>
+              View results
+            </button>
+            <button type="button" className="link" onClick={() => setToast(null)}>
+              Dismiss
+            </button>
+          </span>
         </div>
       ) : null}
-      {loadError ? <div className="banner warn" role="alert">{loadError}</div> : null}
-
-      <section className="card" aria-labelledby="overview-heading">
-        <h2 id="overview-heading">Experiment</h2>
-        <div className="stats">
-          <div>
-            <b>
-              {report.progress.valid}/{report.progress.planned}
-            </b>
-            <span>planned trials counted</span>
-          </div>
-          <div>
-            <b>{callsLeft ?? "–"}</b>
-            <span>calls left today (cap {usage?.cap ?? 30})</span>
-          </div>
-          <div>
-            <b>
-              {usage ? `${Math.round(usage.estimatedNeurons / 100) / 10}k` : "–"}
-              <small>/10k</small>
-            </b>
-            <span>
-              neurons used, estimate <Tag kind={"≈"} />
-            </span>
-          </div>
-          <div>
-            <b>{report.progress.technicalFailures}</b>
-            <span>
-              technical failures · {report.progress.excluded} excluded ·{" "}
-              {report.progress.exploratory} exploratory
-            </span>
-          </div>
+      {loadError ? (
+        <div className="banner banner-warn" role="alert">
+          {loadError}
         </div>
-        <Matrix report={report} onPick={pick} />
-        <p className="muted">
-          {report.progress.complete
-            ? "All 24 planned trials are in."
-            : next
-              ? `Recommended next: scenario ${next.scenario} in ${MODE_NAME[next.mode]} mode, run ${next.repeat}. The order alternates which mode goes first so neither always gets your first attempt.`
-              : ""}{" "}
-          The neuron figure is this app's estimate from call length and reply length; Cloudflare's
-          usage page is the authority.
-        </p>
-      </section>
+      ) : null}
 
       <div className="bench">
-        <section className="card" aria-labelledby="configure-heading">
-          <h2 id="configure-heading">
-            <span className="step">1</span> Configure
+        <section className="panel config" aria-labelledby="config-heading">
+          <h2 id="config-heading" className="panel-title">
+            Configuration
           </h2>
-          <div className="modes" role="radiogroup" aria-label="Turn-taking mode">
-            {MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="radio"
-                aria-checked={mode === m}
-                className={mode === m ? "mode on" : "mode"}
-                disabled={busy || !!pending}
-                onClick={() => {
-                  setFollowPlan(false);
-                  setMode(m);
-                }}
-              >
-                <span className="mode-name">{MODE_NAME[m]}</span>
-                <span className="mode-sub">eotThreshold {EOT_THRESHOLD[m]}</span>
-                <span className="mode-desc">
-                  {m === "standard" ? "Ends the turn sooner" : "Waits for more certainty"}
-                </span>
-              </button>
-            ))}
+
+          <div className="next-card">
+            <div className="next-top">
+              <span className="eyebrow">{report.progress.complete ? "Plan complete" : "Recommended next"}</span>
+              <span className="next-count">
+                {report.progress.valid} of {report.progress.planned}
+              </span>
+            </div>
+            <p className="next-title">
+              {report.progress.complete
+                ? "All 24 planned trials are in."
+                : next
+                  ? `Scenario ${next.scenario} · ${MODE_NAME[next.mode]} · run ${next.repeat}`
+                  : "—"}
+            </p>
+            <div className="progress" role="progressbar" aria-label="Planned trials counted" aria-valuemin={0} aria-valuemax={report.progress.planned} aria-valuenow={report.progress.valid}>
+              <span style={{ width: `${progressPct}%` }} />
+            </div>
+            {next ? (
+              onPlan ? (
+                <p className="fine">
+                  Recommended next: scenario {next.scenario} in {MODE_NAME[next.mode]} mode, run {next.repeat}. The order alternates which mode goes first.
+                </p>
+              ) : (
+                <button type="button" className="btn btn-quiet btn-sm" disabled={locked} onClick={() => setFollowPlan(true)}>
+                  Back to the recommended trial
+                </button>
+              )
+            ) : null}
           </div>
-          <label htmlFor="scenario">Scenario</label>
-          <select
-            id="scenario"
-            value={scenarioId}
-            disabled={busy || !!pending}
-            onChange={(e) => {
-              setFollowPlan(false);
-              setScenarioId(Number(e.target.value));
-            }}
-          >
-            {SCENARIOS.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.id}. {s.name} ({s.tests})
-              </option>
-            ))}
-          </select>
-          <p className="muted">
-            {scenario.intent} The threshold is the only difference between modes: same prompt, model,
-            voice and script.
-          </p>
-          {!onPlan && next ? (
-            <button
-              type="button"
-              className="ghost"
-              disabled={busy || !!pending}
-              onClick={() => setFollowPlan(true)}
-            >
-              Back to the recommended trial
-            </button>
-          ) : null}
+
+          <fieldset className="field">
+            <legend>Mode</legend>
+            <div className="mode-switch" role="radiogroup" aria-label="Turn-taking mode">
+              {MODES.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === m}
+                  className={mode === m ? `mode-opt on ${m}` : `mode-opt ${m}`}
+                  disabled={locked}
+                  onClick={() => {
+                    setFollowPlan(false);
+                    setMode(m);
+                  }}
+                >
+                  <span className="mode-name">{MODE_NAME[m]}</span>
+                  <span className="mode-sub">
+                    <code>eotThreshold {EOT_THRESHOLD[m].toFixed(2)}</code>
+                  </span>
+                  <span className="mode-desc">{m === "standard" ? "Ends the turn sooner" : "Waits for more certainty"}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="field">
+            <legend>Scenario</legend>
+            <div className="scenario-list" role="radiogroup" aria-label="Scenario">
+              {SCENARIOS.map((s) => {
+                const isNext = next?.scenario === s.id && next.mode === mode;
+                return (
+                  <label key={s.id} className={scenarioId === s.id ? "scenario on" : "scenario"}>
+                    <input
+                      type="radio"
+                      name="scenario"
+                      checked={scenarioId === s.id}
+                      disabled={locked}
+                      onChange={() => {
+                        setFollowPlan(false);
+                        setScenarioId(s.id);
+                      }}
+                    />
+                    <span className="scenario-n">{s.id}</span>
+                    <span className="scenario-text">
+                      <span className="scenario-name">
+                        {s.name}
+                        {isNext ? <span className="pill-next">next</span> : null}
+                      </span>
+                      <span className="scenario-tests">{s.tests}</span>
+                    </span>
+                    <span className="scenario-dots" aria-label={PLAN_MODES.map((m) => `${MODE_NAME[m]} ${Math.min(countedIn(trials ?? [], s.id, m), REPEATS)} of ${REPEATS}`).join(", ")}>
+                      {PLAN_MODES.map((m) => (
+                        <span className={`dots ${m}`} key={m}>
+                          {Array.from({ length: REPEATS }, (_, i) => (
+                            <i key={i} className={i < countedIn(trials ?? [], s.id, m) ? "filled" : ""} />
+                          ))}
+                        </span>
+                      ))}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="legend-line">
+              <span className="dots standard"><i className="filled" /></span> Standard runs
+              <span className="dots patient"><i className="filled" /></span> Patient runs
+            </p>
+          </fieldset>
+
+          <div className="script-block" key={`${scenarioId}-${mode}`}>
+            <div className="script-head">
+              <h3>Read aloud</h3>
+              <span className="fine">Hold each pause until its bar fills</span>
+            </div>
+            <ScriptGuide scenario={scenario} silenceSince={call.silenceSince} pausesHeld={call.pausesHeld} live={call.live} />
+            <p className="fine">
+              <strong>Looking for:</strong> {scenario.intent} The timer is silent; your real pauses are measured approximately.
+            </p>
+          </div>
         </section>
 
-        <section className="card" aria-labelledby="speak-heading">
-          <h2 id="speak-heading">
-            <span className="step">2</span> Speak
-          </h2>
-          <p className="muted">
-            Press Start, wait for "Listening", then read this aloud. Hold each pause until its bar
-            fills. The timer is silent and your real pause length is approximate.
-          </p>
-          <ScriptGuide
-            scenario={scenario}
-            silenceSince={call.silenceSince}
-            pausesHeld={call.pausesHeld}
-            live={call.live}
-          />
-          <div className="row">
+        <section className="panel session" aria-labelledby="session-heading">
+          <div className="session-head">
+            <h2 id="session-heading" className="panel-title">
+              Live session
+            </h2>
+            <span className={`phase-pill phase-${phase}`} aria-live="polite">
+              <span className="phase-dot" aria-hidden="true" />
+              {PHASE_LABEL[phase]}
+            </span>
+          </div>
+
+          <div className={call.live ? "mic-card live" : "mic-card"}>
+            <div className="mic-info">
+              <span className="mic-label">Microphone</span>
+              <span className="mic-state">
+                {call.live ? "On · streaming to the agent" : phase === "checking_mic" ? "Requesting access…" : "Off"}
+              </span>
+            </div>
+            <MicMeter level={call.audioLevel} live={call.live} />
+          </div>
+
+          <ol className="signal" aria-label="Session signal">
+            {SIGNALS.map((s, i) => (
+              <li key={s} className={active === i ? "on" : ""} aria-current={active === i ? "step" : undefined}>
+                {s}
+              </li>
+            ))}
+          </ol>
+
+          {/* On narrow screens the script panel is far above; repeat it next to the controls. */}
+          <div className="script-inline" aria-hidden="true">
+            <ScriptGuide scenario={scenario} silenceSince={call.silenceSince} pausesHeld={call.pausesHeld} live={call.live} />
+          </div>
+
+          <div className="controls">
             <button
               type="button"
-              className="primary"
-              onClick={() => void call.start(mode, scenarioId)}
-              disabled={busy || !!pending}
+              className="btn btn-accent"
+              onClick={() => void real.start(mode, scenarioId)}
+              disabled={busy || !!pending || mock === "live"}
             >
               Start call
             </button>
-            <button type="button" onClick={call.end} disabled={!canEnd(call.state)}>
+            <button type="button" className="btn btn-secondary" onClick={real.end} disabled={!canEnd(real.state)}>
               {phase === "checking_mic" || phase === "connecting" ? "Cancel" : "End call"}
             </button>
-            <button type="button" onClick={call.cutOff} disabled={!call.live}>
+            <button type="button" className="btn btn-quiet" onClick={real.cutOff} disabled={!call.live || mock === "live"}>
               Cut me off{call.cutOffs ? ` (${call.cutOffs})` : ""}
             </button>
           </div>
-          <p className={`status phase-${phase}`} aria-live="polite">
-            <span className="status-dot" />
-            {PHASE_LABEL[phase]}
-            {call.live ? (
-              <span className="meter" aria-hidden="true">
-                <span style={{ width: `${Math.min(100, call.audioLevel * 400)}%` }} />
-              </span>
-            ) : null}
-          </p>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={autoEnd}
-              disabled={busy}
-              onChange={(e) => setAutoEnd(e.target.checked)}
-            />
+            <input type="checkbox" checked={autoEnd} disabled={busy} onChange={(e) => setAutoEnd(e.target.checked)} />
             End the call automatically after the first reply (saves Workers AI allocation)
           </label>
-          {pending && !busy ? (
-            <p className="muted">Label or dismiss the last call before starting another.</p>
+          {pending && !busy ? <p className="fine">Label or dismiss the last call before starting another.</p> : null}
+
+          <div className="transcript-wrap">
+            <h3 className="sub-title">
+              Transcript <Tag kind="SDK" />
+            </h3>
+            <ul className="transcript" aria-live="polite">
+              {lines.map((l, i) => (
+                <li key={i} className={l.role}>
+                  <span className="who">{l.role === "user" ? "You" : "Agent"}</span>
+                  <span className="said">{l.text}</span>
+                </li>
+              ))}
+              {call.interim ? (
+                <li className="user interim">
+                  <span className="who">You</span>
+                  <span className="said">{call.interim}…</span>
+                </li>
+              ) : null}
+              {!lines.length && !call.interim ? (
+                <li className="empty">
+                  {call.live
+                    ? "Listening. Each line here is a turn the SDK committed."
+                    : "Committed turns and the agent's reply appear here during a call."}
+                </li>
+              ) : null}
+            </ul>
+          </div>
+
+          {call.live ? (
+            <details className="disclose">
+              <summary>Send a typed correction</summary>
+              <form
+                className="row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!correction.trim()) return;
+                  real.sendCorrection(correction.trim());
+                  setCorrection("");
+                }}
+              >
+                <label className="sr-only" htmlFor="correction">
+                  Typed correction
+                </label>
+                <input
+                  id="correction"
+                  value={correction}
+                  placeholder="Bypasses speech recognition; marks the trial as repaired"
+                  onChange={(e) => setCorrection(e.target.value)}
+                />
+                <button type="submit" className="btn btn-secondary btn-sm" disabled={!correction.trim()}>
+                  Send
+                </button>
+              </form>
+            </details>
           ) : null}
+
+          <div className="timings">
+            <h3 className="sub-title">
+              SDK timings <Tag kind="SDK" />
+            </h3>
+            {timings ? (
+              <dl>
+                <div>
+                  <dt>Final transcript → first audio</dt>
+                  <dd>{ms(timings.finalInputToFirstAudioMs)}</dd>
+                </div>
+                <div>
+                  <dt>Model → first text</dt>
+                  <dd>{ms(timings.modelToFirstTextMs)}</dd>
+                </div>
+                <div>
+                  <dt>TTS → first audio</dt>
+                  <dd>{ms(timings.ttsToFirstAudioMs)}</dd>
+                </div>
+                <div>
+                  <dt>Speech start → final transcript</dt>
+                  <dd>{ms(timings.speechStartToFinalMs)}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="fine">Server-clock timings for the answered turn appear here when the call ends.</p>
+            )}
+          </div>
         </section>
       </div>
 
-      <section className="card" aria-labelledby="observe-heading">
-        <h2 id="observe-heading">
-          <span className="step">3</span> Observe
-        </h2>
-        <ul className="transcript" aria-live="polite">
-          {(call.lines.length ? call.lines : (pending?.lines ?? [])).map((l, i) => (
-            <li key={i} className={l.role}>
-              <span className="who">{l.role === "user" ? "You" : "Agent"}</span>
-              <span>{l.text}</span>
-            </li>
-          ))}
-          {call.interim ? (
-            <li className="user interim">
-              <span className="who">You</span>
-              <span>{call.interim}…</span>
-            </li>
-          ) : null}
-          {!call.lines.length && !pending?.lines.length && !call.interim ? (
-            <li className="empty">
-              {call.live
-                ? "Listening. Each line here is a turn the SDK committed."
-                : "Committed turns and the agent's reply appear here during a call."}
-            </li>
-          ) : null}
-        </ul>
-        {call.live ? (
-          <form
-            className="row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!correction.trim()) return;
-              call.sendCorrection(correction.trim());
-              setCorrection("");
-            }}
-          >
-            <label className="sr-only" htmlFor="correction">
-              Typed correction
-            </label>
-            <input
-              id="correction"
-              value={correction}
-              placeholder="Typed correction (bypasses speech recognition; marks the trial as repaired)"
-              onChange={(e) => setCorrection(e.target.value)}
+      <div ref={labelRef} className="label-zone">
+        {pending && !busy ? (
+          showFailure ? (
+            <FailureCard key={pending.name} capture={pending} onSaved={done} onDismiss={dismiss} onExpired={onExpired} />
+          ) : (
+            <LabelForm
+              key={pending.name}
+              capture={pending}
+              scenario={scenarioById(pending.scenario) ?? SCENARIOS[0]}
+              trials={trials ?? []}
+              onSaved={mock ? () => dismiss() : done}
+              onDiscard={dismiss}
+              onExpired={onExpired}
             />
-            <button type="submit" disabled={!correction.trim()}>
-              Send
-            </button>
-          </form>
+          )
         ) : null}
-      </section>
-
-      {pending && !busy ? (
-        showFailure ? (
-          <FailureCard
-            key={pending.name}
-            capture={pending}
-            onSaved={done}
-            onDismiss={dismiss}
-            onExpired={onExpired}
-          />
-        ) : (
-          <LabelForm
-            key={pending.name}
-            capture={pending}
-            scenario={scenarioById(pending.scenario) ?? SCENARIOS[0]}
-            trials={trials ?? []}
-            onSaved={done}
-            onDiscard={dismiss}
-            onExpired={onExpired}
-          />
-        )
-      ) : null}
-
-      <ReportView report={report} trials={trials ?? []} onExclude={exclude} />
-
-      <section className="card danger" aria-labelledby="danger-heading">
-        <h2 id="danger-heading">Remove all trials</h2>
-        <p className="muted">
-          Download the CSV first. This clears the report. The rows are moved to an archive table in
-          the Durable Object rather than destroyed, but the app has no restore button. To exclude one
-          bad trial, open it in the list above instead.
-        </p>
-        <label htmlFor="confirm">
-          Type <code>{deletePhrase}</code> to confirm
-        </label>
-        <div className="row">
-          <input
-            id="confirm"
-            value={confirmText}
-            autoComplete="off"
-            onChange={(e) => setConfirmText(e.target.value)}
-          />
-          <button
-            type="button"
-            className="destructive"
-            disabled={confirmText !== deletePhrase || !trials?.length}
-            onClick={() => void deleteAll()}
-          >
-            Remove all trials
-          </button>
-        </div>
-      </section>
-    </>
+      </div>
+    </div>
   );
 }

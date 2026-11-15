@@ -1,6 +1,24 @@
 # Build progress
 
-Working log for the v2 build, updated at every verified milestone. Newest status first.
+Working log, updated at every verified milestone. Newest status first.
+
+## v3 premium frontend (branch `design/v3`, 2026-11-15)
+
+| Area | Status |
+|---|---|
+| Design system (tokens, buttons, panels, tags, motion), light theme | Done |
+| Navigation: Overview, Workbench, Results, Demo (hash routes; `?demo` still opens the demo) | Done |
+| Overview: hero with the Standard vs Patient animation, problem, measures, experiment, what you learn | Done |
+| Workbench: configuration and live session side by side, labeling after the call | Done |
+| Results: decision, Standard vs Patient, scenario chart, 24-trial matrix, evidence, CSV, typed delete | Done |
+| Demo: animated synthetic timeline, evaluation, full synthetic report | Done |
+| Backend, SDK, Durable Objects, quotas, schema, API, thresholds, methodology | Unchanged |
+| Local checks: type check, 45 unit tests, build, API smoke 46/46, browser test 50/50 | Pass |
+| Merge to `main` (deploys production) | **Waiting for the owner's go-ahead** |
+
+The Workbench stays mounted while signed in, so moving to Results during a call or before labeling it does not lose the call.
+
+## v2 build
 
 ## Where things stand (2026-11-15)
 
@@ -12,7 +30,7 @@ Working log for the v2 build, updated at every verified milestone. Newest status
 | P2 workbench redesign, silent pause timer, synthetic demo mode | Done on `build/v2` |
 | P3 45 unit tests, GitHub Actions CI, origin checks, security headers, safe previews block | Done; CI green on draft PR #1 |
 | P4 README, ARCHITECTURE, METHODOLOGY, TESTING, DECISION_MEMO, DEMO, FINDINGS/FRICTION updates | Written; committed to `build/v2` |
-| Merge to `main` (deploys production) | **Waiting for the owner's go-ahead** |
+| Merge to `main` (deploys production) | Done (PR #1, production version 3eb99d46) |
 | Real-microphone checks and the 24 trials | Owner, in Chrome (docs/TESTING.md §4) |
 | Screenshots in the README | Not done: binary files could not be committed through the browser-only workflow |
 

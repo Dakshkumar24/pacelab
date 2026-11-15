@@ -231,8 +231,8 @@ export function FailureCard({
   }
 
   return (
-    <section className="card failure" aria-labelledby="failure-heading" role="alert">
-      <h2 id="failure-heading">{title}</h2>
+    <section className="panel failure" aria-labelledby="failure-heading" role="alert">
+      <h2 id="failure-heading" className="h-block">{title}</h2>
       <p>{message}</p>
       <p>
         <strong>What to do:</strong> {action}
@@ -243,16 +243,16 @@ export function FailureCard({
       </p>
       {capture.failure && capture.failure.startsWith("mic_") ? null : (
         <div className="row">
-          <button type="button" onClick={record} disabled={busy}>
+          <button type="button" className="btn btn-primary" onClick={record} disabled={busy}>
             {busy ? "Saving…" : "Record as technical failure"}
           </button>
-          <button type="button" className="ghost" onClick={onDismiss} disabled={busy}>
+          <button type="button" className="btn btn-quiet" onClick={onDismiss} disabled={busy}>
             Dismiss
           </button>
         </div>
       )}
       {capture.failure && capture.failure.startsWith("mic_") ? (
-        <button type="button" className="ghost" onClick={onDismiss}>
+        <button type="button" className="btn btn-quiet" onClick={onDismiss}>
           Dismiss
         </button>
       ) : null}
@@ -326,9 +326,10 @@ export function LabelForm({
   }
 
   return (
-    <section className="card" aria-labelledby="label-heading">
-      <h2 id="label-heading">
-        <span className="step">4</span> Label this call
+    <section className="panel label-card" aria-labelledby="label-heading">
+      <p className="eyebrow">After the call</p>
+      <h2 id="label-heading" className="h-block">
+        Label this call
       </h2>
       <p className="muted">
         Scenario {capture.scenario} ({scenario.name}) in {MODE_NAME[capture.mode]} mode. What to
@@ -341,6 +342,9 @@ export function LabelForm({
         </p>
       ) : null}
 
+      <div className="label-grid">
+      <div className="label-evidence">
+      <h3 className="sub-title">Evidence</h3>
       <dl className="evidence">
         <dt>
           Recognized request <Tag kind="SDK" />
@@ -385,6 +389,9 @@ export function LabelForm({
         </dt>
         <dd>{capture.cutOffs}</dd>
       </dl>
+      </div>
+      <div className="label-questions">
+      <h3 className="sub-title">Your judgment</h3>
 
       <Choice
         legend={<>Did the agent reply before you finished? <Tag kind="M" /></>}
@@ -446,16 +453,18 @@ export function LabelForm({
       <input id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
 
       <div className="row">
-        <button type="button" onClick={save} disabled={!ready || busy}>
+        <button type="button" className="btn btn-accent" onClick={save} disabled={!ready || busy}>
           {busy ? "Saving…" : "Save trial"}
         </button>
-        <button type="button" className="ghost" onClick={onDiscard} disabled={busy}>
+        <button type="button" className="btn btn-quiet" onClick={onDiscard} disabled={busy}>
           Discard without saving
         </button>
       </div>
       {!labelled ? <p className="muted">Answer all four questions to save.</p> : null}
       {error ? <p className="error" role="alert">{error}</p> : null}
-      <details>
+      </div>
+      </div>
+      <details className="disclose">
         <summary>Event timeline for this call</summary>
         <Timeline events={capture.events} />
       </details>
