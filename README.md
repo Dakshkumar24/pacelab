@@ -43,7 +43,7 @@ Configure → Speak → Observe → Label → Save → Compare → Decide
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph Browser
     UI["React workbench<br/>(Workbench, Report, Demo)"]
     Hook["useCall<br/>state machine + useVoiceAgent"]
