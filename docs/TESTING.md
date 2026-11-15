@@ -39,7 +39,9 @@ Without the binding, starting a call fails in the agent, which is how the test e
 
 ## 3. Local browser test
 
-`scripts/ui-local.mjs` drives the real UI in headless Chrome with a fake microphone (29 checks): the gate, the demo (labelled synthetic, makes no API or agent requests), the recommended trial, pause markers, a double-clicked Start making one reservation, the failure card instead of a label form, the slot not being used, recording a technical failure, persistence across reload, Start then Cancel never getting stuck, the delete confirmation, no horizontal overflow at 390 px, no page errors, and a denied microphone failing before any reservation.
+`scripts/ui-local.mjs` drives the real UI in headless Chrome with a fake microphone (50 checks): the Overview and its navigation (Overview | Workbench | Results | Demo, current page marked, skip link first in tab order), the demo (labelled synthetic, plays to the evaluation, client-side CSV, makes no API or agent requests), reduced motion showing final frames, Results requiring sign-in, the recommended trial, pause markers, a double-clicked Start making one reservation, the failure card instead of a label form, the slot not being used, recording a technical failure, persistence across reload, Start then Cancel never getting stuck, honest "Insufficient evidence", the CSV export link, the typed delete confirmation, no horizontal overflow at 390 px on every page, no page errors, and a denied microphone failing before any reservation.
+
+For visual review of states that need a live call, the Vite dev server (only) accepts `?mock=live#/workbench` and `?mock=label#/workbench`. They show invented data under a "Mocked" banner, use no microphone or model, and are removed from production builds (every use is guarded by `import.meta.env.DEV`; the built bundle contains none of the mock text). Don't press Save in the label mock: it posts to whatever server the dev page is talking to, which is your local dev server.
 
 ```sh
 npm i -g playwright && npx playwright install chrome

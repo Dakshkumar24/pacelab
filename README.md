@@ -4,7 +4,7 @@
 
 PaceLab is a test bench that measures whether a real-time voice agent waits for people to finish speaking, and compares two end-of-turn settings on the same scripted requests.
 
-Live: <https://pacelab.dakshkumar19860.workers.dev> (the [demo](https://pacelab.dakshkumar19860.workers.dev/?demo) needs no sign-in and no microphone).
+Live: <https://pacelab.dakshkumar19860.workers.dev> (the [demo](https://pacelab.dakshkumar19860.workers.dev/#/demo) needs no sign-in and no microphone; `/?demo` still works).
 
 ## The problem
 
@@ -45,7 +45,7 @@ Configure → Speak → Observe → Label → Save → Compare → Decide
 ```mermaid
 flowchart TB
   subgraph Browser
-    UI["React workbench<br/>(Workbench, Report, Demo)"]
+    UI["React app<br/>(Overview, Workbench, Results, Demo)"]
     Hook["useCall<br/>state machine + useVoiceAgent"]
   end
   subgraph Worker["Cloudflare Worker (src/server.ts)"]
