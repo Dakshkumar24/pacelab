@@ -1098,7 +1098,6 @@ legend {
 }
 
 /* One 9s loop: the playhead sweeps both lanes, events land, then hold and reset. */
-.hero-viz .reveal-rect,
 .hero-viz .playhead {
   animation: sweep 9s linear infinite;
 }
@@ -1106,7 +1105,7 @@ legend {
 .hero-viz .reveal-rect {
   transform-box: fill-box;
   transform-origin: 0 50%;
-  animation-name: grow;
+  animation: grow 9s linear infinite;
 }
 
 @keyframes grow {
@@ -1135,25 +1134,25 @@ legend {
   }
 }
 
+/* Full shorthands: a nameless shorthand is minified to "animation: none". */
 .hero-viz .ev {
-  animation: 9s linear infinite both;
   opacity: 0;
 }
 
 .hero-viz .ev-early {
-  animation-name: ev-early;
+  animation: ev-early 9s linear infinite both;
 }
 
 .hero-viz .ev-cut {
-  animation-name: ev-cut;
+  animation: ev-cut 9s linear infinite both;
 }
 
 .hero-viz .ev-late {
-  animation-name: ev-late;
+  animation: ev-late 9s linear infinite both;
 }
 
 .hero-viz .ev-verdict {
-  animation-name: ev-verdict;
+  animation: ev-verdict 9s linear infinite both;
 }
 
 @keyframes ev-early {
