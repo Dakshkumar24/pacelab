@@ -22,7 +22,7 @@ export const TTS_MODEL = "@cf/deepgram/aura-1";
 export const TTS_SPEAKER = "asteria";
 
 export const SYSTEM_PROMPT = `You are a friendly scheduling assistant for a fictional dental clinic.
-Reply in one or two short spoken sentences. No lists, no markdown, no emoji.
+Reply in one short spoken sentence. No lists, no markdown, no emoji.
 If the request seems incomplete, ask the person to finish their thought.`;
 
 /** Durable Object class names as routeAgentRequest spells them on the wire. */
@@ -33,8 +33,29 @@ export const AGENT_FOR_MODE: Record<Mode, string> = {
 
 // --- Safeguards on Workers AI spend -----------------------------------------
 
-/** Calls allowed per UTC day across both modes. 24 trials plus a few retries. */
+/** Established calls allowed per UTC day across both modes. 24 trials plus a few retries. */
 export const DAILY_CALL_CAP = 30;
+
+/**
+ * Start attempts allowed per UTC day, whether or not they became calls.
+ * A failed startup gives its slot back, so this second cap bounds retries.
+ */
+export const DAILY_ATTEMPT_CAP = 90;
+
+/** A reservation that has not become a call after this long is treated as a failed startup. */
+export const STARTUP_GRACE_MS = 30_000;
+
+/** The browser gives up on a call that is not listening after this long. */
+export const STARTUP_TIMEOUT_MS = 15_000;
+
+/**
+ * Workers AI free allocation and list prices, for the budget estimate only.
+ * Source: developers.cloudflare.com/workers-ai/platform/pricing (checked 2026-11-15).
+ * The estimate is not a bill: Cloudflare's own usage page is the authority.
+ */
+export const NEURON_BUDGET_PER_DAY = 10_000;
+export const FLUX_NEURONS_PER_MINUTE = 700;
+export const AURA_NEURONS_PER_1K_CHARS = 1363.64;
 
 /** A call is force-ended after this long, so a forgotten tab cannot bill all day. */
 export const MAX_CALL_MS = 90_000;

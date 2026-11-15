@@ -2,7 +2,7 @@
   "name": "pacelab",
   "version": "0.1.0",
   "private": true,
-  "description": "PaceLab — Compare. Diagnose. Improve. A turn-taking testbench for Cloudflare voice agents.",
+  "description": "PaceLab — Compare. Diagnose. Improve. An evaluation workbench for voice-agent turn-taking on Cloudflare.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "build": "vite build",
     "deploy": "vite build && wrangler deploy",
     "types": "wrangler types env.d.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "agents": "0.33.0",

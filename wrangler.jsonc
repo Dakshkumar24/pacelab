@@ -12,6 +12,11 @@
     "run_worker_first": ["/agents/*", "/api/*"]
   },
   "observability": { "enabled": true },
+  // Branch builds run `wrangler preview`. A Preview gets only what is listed
+  // here: no AI binding and no secrets, so it can serve the page and the demo
+  // but every /api and /agents route fails closed and nothing spends Workers AI.
+  // Durable Objects in a Preview get their own storage, never production's.
+  "previews": {},
   "durable_objects": {
     "bindings": [
       { "name": "StandardVoiceAgent", "class_name": "StandardVoiceAgent" },
