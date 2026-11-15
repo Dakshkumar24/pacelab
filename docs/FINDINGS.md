@@ -1,6 +1,6 @@
 # Findings
 
-_The Phase 5 results table (24 trials, per scenario and mode) and the one-page PM Decision Memo go here._
+_The results table for the 24 planned trials goes here once they are run. The decision memo is in [DECISION_MEMO.md](DECISION_MEMO.md)._
 
 ## How to read the measurements
 
@@ -56,3 +56,13 @@ The threshold changes *when* the turn ends, not how fast the reply is generated.
 - With clean audio, Flux ended the turn 139–241 ms after speech stopped.
 
 These probes show the pipeline works. They say nothing about pauses.
+
+## Reproducible failures
+
+### R1. "Speech recognition failed to start" (2026-11-15, diagnosed)
+
+- **Seen:** three calls in a row failed to start; no transcript, no reply, and the call counter rose from 19 to 21.
+- **Evidence:** Worker logs at 00:55:01, 00:55:22 and 00:56:44 PST each show `Flux STT WebSocket upgrade failed` then `Speech recognition failed to start`. At the same time the Workers AI usage page showed 10.25k of 10k neurons used today (Flux 7.13k, Aura 3k, Gemma 123) and the message that the 10,000-neuron limit was exceeded.
+- **Cause:** the account's free daily Workers AI allocation was used up, so Workers AI refused new Flux sessions. Verified from the two sources above. The exact HTTP status and body Workers AI returns in this state were not captured, because the SDK discards them; the v2 code logs them.
+- **Not the cause:** the microphone, authentication or the voice code. Calls had worked earlier the same day.
+- **Fixes in v2:** the cause is shown to the user with the reset time; failed starts give their call slot back; a failed start is recorded as a technical failure, never as a trial; auto-end keeps each call short. See FRICTION F11 and F12.

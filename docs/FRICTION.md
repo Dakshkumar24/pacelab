@@ -86,6 +86,20 @@ Answers come from the installed package's type definitions and compiled source (
 - **Severity:** Medium. It is the number a PM would quote, and it is the wrong one.
 - **Fix:** Add a `speechEndToFinalMs` (last speech end → final) to `turn_metrics`, and document what `speechStartToFinalMs` covers.
 
+### F11. "Speech recognition failed to start" hides the provider's reason
+- **Tried:** Starting calls after a day of testing on Workers Free.
+- **Expected:** An error that says why Flux would not start.
+- **Happened:** The SDK logged `Flux STT WebSocket upgrade failed` and sent the browser only "Speech recognition failed to start". The cause, the account's 10,000-neuron daily allocation being used up, was visible only on the Workers AI usage page. Each retry also used one of PaceLab's call slots, because the old code counted a slot before the call came up.
+- **Severity:** High. It looks like an app bug, and nothing in the error points at billing or quota.
+- **Fix:** PaceLab now wraps the AI binding, reads the response Workers AI returns instead of a WebSocket, logs a sanitized cause, and tells the browser. Failed starts give their slot back. The SDK should include the provider's status and message in its error, and Workers AI could return a distinct quota error.
+
+### F12. Flux bills for open time, so the free allocation runs out sooner than expected
+- **Tried:** Planning the 24 trials on Workers Free.
+- **Expected:** A few dozen short calls to fit easily in 10,000 neurons.
+- **Happened:** Flux is billed per audio minute while the session is open (700 neurons a minute at list price) and Aura per character spoken. On the day the allocation ran out, Flux accounted for 7.13k of 10.25k neurons. A call left open while someone reads or labels costs as much as one in use.
+- **Severity:** Medium for anyone building voice on the free plan.
+- **Fix:** PaceLab ends a call shortly after the first reply and shows an estimated budget. Voice docs could give a per-minute cost for the pipeline, and the SDK could close Flux after an idle period.
+
 ### Environment note (not SDK friction)
 The built-in browser pane in the Claude desktop app does not grant microphone access, so live calls run in a normal browser.
 
