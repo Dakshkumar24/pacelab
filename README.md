@@ -1,218 +1,689 @@
 # PaceLab
 
+### Voice agents should know when to listen.
+
+An open-source turn-taking evaluation project built on Cloudflare's Agents SDK.
+
 **Compare. Diagnose. Improve.**
 
-PaceLab is a test bench that measures whether a real-time voice agent waits for people to finish speaking, and compares two end-of-turn settings on the same scripted requests.
+[Live Website](https://pacelab.dakshkumar19860.workers.dev) · [Interactive Demo](https://pacelab.dakshkumar19860.workers.dev/#/demo)
 
-Live: <https://pacelab.dakshkumar19860.workers.dev> (the [demo](https://pacelab.dakshkumar19860.workers.dev/#/demo) needs no sign-in and no microphone; `/?demo` still works).
+Voice agents can generate impressive responses. But knowing *when* to respond is a different problem.
 
-## The problem
+PaceLab investigates how real-time voice agents handle pauses, hesitations, corrections, and interruptions. It helps developers compare turn-taking configurations, inspect what happened during a conversation, and understand the trade-off between responding too early and making users wait.
 
-A voice demo answers "can this agent talk?" Real callers pause mid-sentence, say "um", correct themselves and trail off. Each of those silences is a chance for the agent to decide the caller is done and start answering. The caller gets cut off, the agent answers half a question, and nothing in a happy-path demo shows it.
+The current version evaluates a reference voice agent built on Cloudflare. The longer-term direction is reproducible voice-agent testing that fits naturally into a developer's workflow.
 
-Turn detection is a tunable trade-off. Cloudflare's Agents SDK voice pipeline uses Deepgram Flux, whose `eotThreshold` sets how confident Flux must be before it ends the caller's turn. A lower threshold answers sooner and interrupts more; a higher one waits longer. That trade-off is usually tuned by feel.
+---
 
-## What PaceLab does
+## 1. Why I built PaceLab
 
-PaceLab turns the trade-off into a controlled, repeatable experiment:
+I started exploring Cloudflare's voice-agent capabilities after attending a Cloudflare × Coval event about building voice AI that holds up in production.
 
-- **Two configurations, one variable.** Standard (`eotThreshold` 0.70) and Patient (0.85) share the same prompt, model, voice and scripts.
-- **Six scripted scenarios** with pauses, fillers and self-corrections, read aloud by a person with a silent pause timer.
-- **A guided 24-trial matrix:** 6 scenarios × 2 modes × 2 repeats, in a balanced order, with the next trial always recommended.
-- **Evidence kept separate from judgment.** What the SDK measured, what a person judged and what the browser estimated are stored and labelled separately.
-- **A Turn Failure Report** compares the modes with correct denominators and says "Insufficient evidence" until there is enough data.
+One question stayed with me:
 
-```
+**How does a developer know their voice agent is ready for real human conversations, not just a successful demo?**
+
+Consider a caller saying:
+
+> "I'd like to schedule an appointment for Monday... actually, wait... Thursday afternoon."
+
+The agent has to decide whether the caller has finished.
+
+Respond too early, and it might act on the wrong information.
+
+Wait too long, and the conversation feels slow and unnatural.
+
+This is especially difficult when people pause mid-sentence, restart thoughts, hesitate, or correct themselves.
+
+Voice-agent performance isn't only about speech recognition or the quality of an AI-generated response. The timing of the interaction affects the entire experience.
+
+That led me to a more specific engineering question:
+
+**If I change how an agent detects the end of a user's turn, how can I measure whether the conversation actually improves?**
+
+PaceLab is my attempt to investigate that question through controlled testing.
+
+## 2. Understanding the developer experience gap
+
+Cloudflare already provides much of the technology developers need to build and operate voice agents.
+
+Its Agents SDK supports real-time voice interactions. Workers AI provides inference for speech recognition, language generation, and speech synthesis. The voice pipeline also exposes timing measurements and turn outcomes that help developers inspect behavior.
+
+These are important capabilities.
+
+But measuring what happened and evaluating whether the behavior was good are different tasks.
+
+For example, a developer might adjust an end-of-turn threshold and observe that the agent responds more slowly. That alone doesn't answer whether the change reduced premature interruptions enough to justify the additional wait.
+
+Developers need a way to connect technical measurements with conversational outcomes.
+
+PaceLab explores that workflow:
+
+- Run comparable conversations against different configurations.
+- Capture turn-taking events and timing measurements.
+- Evaluate whether the agent understood the complete request.
+- Distinguish premature responses from ordinary transcript boundaries.
+- Compare results rather than relying on intuition.
+- Identify changes worth investigating further.
+
+This is not a claim that Cloudflare lacks observability or that conversational evaluation is an entirely unsolved category.
+
+Companies such as Coval already provide broader voice-agent evaluation and regression-testing solutions.
+
+The opportunity I'm exploring is narrower: **could reproducible, turn-taking-specific testing become a more accessible part of the Cloudflare voice-agent developer experience?**
+
+## 3. What PaceLab does today
+
+PaceLab is a deployed test bench built around a Cloudflare-based reference voice agent.
+
+It compares two configurations of the same voice pipeline.
+
+| Configuration | `eotThreshold` | Purpose |
+|---|---:|---|
+| Standard | 0.70 | Tests a less conservative turn-ending threshold |
+| Patient | 0.85 | Tests a more conservative turn-ending threshold |
+
+Both configurations use the same prompt, language model, speech synthesis model, and scripted inputs.
+
+The only intentionally changed variable is the end-of-turn confidence threshold.
+
+The experiment tests whether different thresholds affect how the agent behaves when a speaker pauses, hesitates, or corrects a request.
+
+A higher threshold may reduce premature turn commitments, but it can also increase the time before the agent responds. The actual outcome depends on the speech input and runtime conditions.
+
+PaceLab is designed to measure that trade-off, not assume which configuration is better.
+
+### Controlled scenarios
+
+The current test suite includes six speaking patterns:
+
+| Scenario | What it investigates |
+|---|---|
+| Fluent baseline | Whether ordinary speech is recognized and answered correctly |
+| Short pause | Whether a brief pause causes an early response |
+| Long pause | How the agent handles a longer thinking pause |
+| Hesitations | Whether fillers and restarts affect turn detection |
+| Self-correction | Whether the agent captures a corrected detail |
+| Multiple pauses | Whether repeated pauses cause premature turn-taking |
+
+Each scenario is run twice in both configurations.
+
+That produces a planned experiment of 24 trials:
+
+6 scenarios × 2 configurations × 2 repetitions.
+
+PaceLab recommends the next trial automatically and balances the test order so the same configuration does not always run first.
+
+The scenarios are controlled test cases, not information the agent needs in order to understand the caller. The voice agent itself processes the spoken conversation through its normal pipeline.
+
+## 4. The evaluation workflow
+
+```text
 Configure → Speak → Observe → Label → Save → Compare → Decide
 ```
 
-## Features
+A developer selects a configuration and runs a scripted request.
 
-| Area | What exists |
+PaceLab captures the committed conversation turns, transcript, response, available SDK timing measurements, and browser-side estimates.
+
+After the call, the developer evaluates what occurred.
+
+The results are saved and incorporated into a comparison report.
+
+### Separating measurement from interpretation
+
+One design decision is central to PaceLab: technical events and human judgments should not be treated as the same thing.
+
+| Evidence | Source | Example |
+|---|---|---|
+| SDK measurement | Agents SDK | Time from final transcript to first reply audio |
+| Human judgment | Tester | Whether the reply interrupted an unfinished request |
+| Browser estimate | Client microphone | Approximate pause duration or perceived wait |
+
+PaceLab labels these sources as:
+
+- `[SDK]` — SDK measurements collected on the server clock.
+- `[M]` — Manual evaluation performed by the tester.
+- `[≈]` — Approximate measurements from the browser.
+
+For example, a speech-recognition system committing a turn is an observable event.
+
+But a turn commitment does not automatically prove the agent interrupted inappropriately. A person may have genuinely finished speaking.
+
+The evaluation must account for that distinction.
+
+### What gets evaluated?
+
+After a call, the tester can review:
+
+- Whether the agent replied prematurely.
+- Whether the request was transcribed correctly.
+- Whether the response addressed the intended request.
+- Whether the response was cut short.
+
+Each judgment supports Yes, No, or Unable to determine.
+
+Trials can be saved as Counted, Exploratory, Excluded, or Technical failure.
+
+Only appropriate counted trials enter the experiment's comparative metrics.
+
+This prevents infrastructure errors or uncertain observations from distorting the results.
+
+## 5. Features
+
+| Area | Current implementation |
 |---|---|
-| Live calls | Two voice modes on the Agents SDK (`withVoice`), Flux STT, Gemma 4 26B, Aura-1 TTS |
-| Reliability | Microphone check before any call slot is used; a call state machine (`idle → checking_mic → connecting → listening ⇄ responding → stopping`, plus `failed`); startup timeout; the real cause of a speech-recognition startup failure shown to the user |
-| Guided experiment | Scenario scripts with pause markers that fill while you hold the pause; the 24-trial matrix; recommended next trial; optional auto-end after the first reply to save Workers AI allocation |
-| Evidence | Committed SDK turns, transcripts, agent reply, SDK turn timings, an event timeline, "Cut me off" presses, approximate held pauses and perceived wait |
-| Labelling | Premature reply, transcription correct, reply appropriate, reply cut short: each Yes / No / Unable to determine. Trial status: Counted, Exploratory, Excluded (reason required), Technical failure |
-| Report | Standard vs Patient per scenario and overall, premature-response chart, example failures, metric glossary, decision summary, CSV export |
-| Demo mode | Synthetic, clearly labelled data. Calls nothing on the server and is never stored |
-| Safety | Passphrase sign-in with HttpOnly session cookie and lockout; same-origin checks; 30 calls/day cap and 90-second call limit; delete-all needs a typed count and archives instead of destroying |
-| Quality | 45 unit tests, local API and browser smoke tests, GitHub Actions CI (type check, tests, build) |
+| Voice agent | Cloudflare Agents SDK `withVoice`, Deepgram Flux, Gemma 4 26B, Aura-1 |
+| Turn-taking comparison | Standard and Patient configurations with different end-of-turn thresholds |
+| Guided testing | Six scenarios, silent pause guidance, 24-trial matrix, recommended next trial |
+| Live session | Microphone permission checks, call state handling, live transcripts, automatic end after first reply |
+| Evidence collection | Committed turns, SDK timing measurements, agent responses, event timelines, approximate pauses |
+| Human evaluation | Four conversational-quality labels with Unknown support |
+| Reporting | Standard versus Patient comparisons, scenario-level breakdown, premature-response chart, decision summary |
+| Experiment integrity | Separate counted, exploratory, excluded, and technical-failure records |
+| Export | Download trial evidence as CSV |
+| Public demo | Interactive synthetic example requiring no login, microphone, or AI inference |
+| Access control | Passphrase authentication, secure session cookies, same-origin checks, sign-in lockout |
+| Usage protection | Daily call limits, maximum call duration, failure-aware accounting |
+| Automated quality checks | Type checking, unit tests, API smoke tests, browser tests, GitHub Actions CI |
 
-## Architecture
+### Public demo
+
+The [interactive demo](https://pacelab.dakshkumar19860.workers.dev/#/demo) walks through a simulated conversation and a complete sample evaluation report.
+
+The demonstration uses explicitly labeled synthetic data. Its transcripts, results, and comparison percentages are illustrative, not findings from the real 24-trial experiment.
+
+The public demo does not call an AI model or consume Workers AI allocation.
+
+Live testing and real experiment records are kept separately behind authentication.
+
+---
+
+## 6. Architecture
+
+PaceLab runs on Cloudflare's developer platform.
 
 ```mermaid
 flowchart TB
   subgraph Browser
-    UI["React app<br/>(Overview, Workbench, Results, Demo)"]
-    Hook["useCall<br/>state machine + useVoiceAgent"]
+    UI["React App: Overview, Workbench, Results, Demo"]
+    Hook["useCall state machine and useVoiceAgent"]
   end
-  subgraph Worker["Cloudflare Worker (src/server.ts)"]
-    Gate["Auth, origin check,<br/>route allowlist"]
-    Res["POST /api/call<br/>reserve a slot"]
+
+  subgraph Worker["Cloudflare Worker"]
+    Gate["Authentication, origin checks, route allowlist"]
+    Reserve["Call reservation and quota handling"]
   end
-  subgraph DO["Durable Objects (SQLite)"]
-    Store["TrialStore<br/>trials · calls · auth_failures · archive"]
-    Std["StandardVoiceAgent<br/>eotThreshold 0.70"]
-    Pat["PatientVoiceAgent<br/>eotThreshold 0.85"]
+
+  subgraph Storage["Durable Objects with SQLite"]
+    Store["TrialStore: trials, calls, authentication, archive"]
+    Standard["StandardVoiceAgent: threshold 0.70"]
+    Patient["PatientVoiceAgent: threshold 0.85"]
   end
+
   subgraph AI["Workers AI"]
-    Flux["Flux STT + turn detection"]
-    Gemma["Gemma 4 26B"]
-    Aura["Aura-1 TTS"]
+    Flux["Deepgram Flux: STT and turn detection"]
+    Gemma["Gemma 4 26B: response generation"]
+    Aura["Aura-1: speech synthesis"]
   end
+
   UI --> Hook
-  Hook -- "HTTPS /api/*" --> Gate
-  Hook -- "WebSocket /agents/*" --> Gate
-  Gate --> Res --> Store
-  Gate -- "only with an open reservation" --> Std & Pat
-  Std & Pat --> Flux & Gemma & Aura
-  Std & Pat -- "call established / ended / failed" --> Store
+  Hook -->|"HTTPS API and WebSocket"| Gate
+  Gate --> Reserve
+  Reserve --> Store
+  Gate -->|"Authorized calls"| Standard
+  Gate -->|"Authorized calls"| Patient
+
+  Standard --> Flux
+  Standard --> Gemma
+  Standard --> Aura
+
+  Patient --> Flux
+  Patient --> Gemma
+  Patient --> Aura
+
+  Standard --> Store
+  Patient --> Store
 ```
 
-More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The application uses Durable Objects for voice-agent sessions and SQLite-backed experiment storage.
 
-## Real-time voice pipeline
+Authentication and call reservations prevent unauthorized access to live AI inference.
+
+More details: [Architecture](docs/ARCHITECTURE.md).
+
+### Voice pipeline
 
 ```mermaid
 sequenceDiagram
-  participant U as Browser (mic)
-  participant A as Voice agent (DO)
-  participant F as Flux
-  participant G as Gemma 4
-  participant T as Aura-1
-  U->>A: start_call
-  A->>F: open STT session (eotThreshold)
-  Note over A,F: Startup failure → real cause sent as pacelab_failure
-  U-->>A: audio frames
-  F-->>A: interim transcripts
-  F->>A: EndOfTurn (confidence ≥ threshold, or 5 s timeout)
-  Note right of A: [SDK] speechStartToFinalMs ends here
-  A->>G: onTurn(transcript), streamed
-  Note right of A: [SDK] modelToFirstTextMs
-  G-->>A: first sentence
-  A->>T: synthesize
-  T-->>U: first audio
-  Note right of A: [SDK] finalInputToFirstAudioMs ends here
-  F-->>A: StartOfTurn while replying
-  A--xU: reply aborted (barge-in)
+  participant User as Browser microphone
+  participant Agent as Voice Agent
+  participant Flux as Deepgram Flux
+  participant LLM as Gemma 4
+  participant TTS as Aura-1
+
+  User->>Agent: Start voice session
+  Agent->>Flux: Open recognition session with threshold
+  User->>Agent: Stream audio frames
+  Agent->>Flux: Forward audio
+  Flux-->>Agent: Interim transcripts
+  Flux->>Agent: End-of-turn event
+  Agent->>LLM: Process committed transcript
+  LLM-->>Agent: Stream response text
+  Agent->>TTS: Generate speech
+  TTS-->>User: Reply audio
+
+  opt Caller speaks during reply
+    Flux-->>Agent: New speech-start event
+    Agent-->>User: Reply may be interrupted
+  end
 ```
 
-The browser estimates perceived wait (`[≈]`) from the last moment the mic heard a voice to the first reply audio. That span includes the end-of-turn wait, which no SDK metric covers.
+The reference agent uses the same model pipeline for both configurations.
 
-## Evaluation pipeline
+This makes it possible to investigate how end-of-turn settings affect behavior without intentionally changing the language model or voice.
 
-```mermaid
-flowchart LR
-  S[Scenario script] --> M[Mode] --> C[Live call] --> E["Evidence<br/>[SDK] turns, timings<br/>[≈] pauses, wait"]
-  E --> L["Manual labels [M]<br/>Yes / No / Unknown"]
-  L --> St{"Status"}
-  St -->|Counted| T[(TrialStore)]
-  St -->|Exploratory / Excluded| T
-  C -->|no speech or startup failure| TF[Technical failure] --> T
-  T --> Agg["Aggregation<br/>counted trials only"] --> R[Turn Failure Report] --> D[Decision summary]
+## 7. What the measurements tell us
+
+A major lesson from building PaceLab is that not every timing measurement answers the same question.
+
+### Speech start to final transcript
+
+This measures elapsed time from the beginning of detected speech to a committed transcript.
+
+It includes the user's speaking time and pauses.
+
+It should not be interpreted as pure system latency.
+
+### Final transcript to first audio
+
+This measures how long the system takes to begin speaking after the transcript is committed.
+
+It includes downstream processing such as language generation and speech synthesis.
+
+### Perceived wait
+
+The browser estimates the gap between the last detected spoken audio and the first reply audio.
+
+This is closer to what the user experiences, but it is approximate because microphone-level detection and browser timing have limitations.
+
+### The metric I want to investigate next
+
+A particularly useful measurement would isolate the interval between the speaker's actual final word and the agent's end-of-turn commitment.
+
+That would help developers examine the cost of waiting for greater certainty, independently from the time spent generating the response.
+
+One potential SDK-level improvement is exposing or deriving that measurement more reliably.
+
+## 8. What I've learned so far
+
+PaceLab has generated useful engineering observations, but the complete controlled experiment has not yet been run.
+
+### Finding 1: Turn-taking is a measurable product trade-off
+
+The question isn't simply whether the agent responds quickly.
+
+A useful evaluation needs to examine both premature turn-taking and the delay introduced by more conservative detection.
+
+### Finding 2: The same script is not necessarily the same input
+
+When a person reads a sentence twice, they may change their intonation, speaking speed, or pause duration.
+
+That weakens direct comparisons between configurations.
+
+A stronger next experiment would use recorded human speech replayed identically into each configuration.
+
+### Finding 3: Diagnostics and evaluations serve different purposes
+
+Voice diagnostics tell developers about system behavior.
+
+A testing workflow connects those observations to a specific question, comparable inputs, and interpretable outcomes.
+
+PaceLab explores that layer between instrumentation and developer decisions.
+
+### Finding 4: Infrastructure failures need to be separated from conversational failures
+
+During development, Workers AI quota exhaustion prevented speech recognition from starting.
+
+PaceLab initially surfaced this as a general speech-recognition startup problem. The error-handling workflow was improved to identify the provider's quota response and record the attempt as a technical failure.
+
+Later testing also encountered quota errors after the dashboard displayed a reset daily allowance. The cause of that discrepancy has not been independently confirmed.
+
+These events are infrastructure failures, not evidence that either turn-taking configuration is worse.
+
+### Current evidence status
+
+The planned 24-trial experiment has not been completed.
+
+An earlier exploratory comparison suggested that Standard could reply during a multi-pause request while Patient waited for more of the request. That observation is not sufficient to establish a general performance advantage.
+
+The public demonstration's completed trial matrix is synthetic and must not be interpreted as experimental evidence.
+
+See [Findings](docs/FINDINGS.md) and [Developer Friction](docs/FRICTION.md).
+
+---
+
+## 9. The bigger opportunity
+
+PaceLab started as a focused experiment using a reference voice agent.
+
+The longer-term idea is a developer tool that helps teams evaluate conversational reliability before deploying changes.
+
+The intended workflow is:
+
+```text
+Connect an agent
+       ↓
+Run natural or controlled tests
+       ↓
+Analyze conversation evidence
+       ↓
+Identify possible failures
+       ↓
+Compare configurations or versions
+       ↓
+Make an informed engineering decision
 ```
 
-## Standard vs Patient
+### Connect an agent
 
-| | Standard | Patient |
-|---|---|---|
-| `eotThreshold` | 0.70 | 0.85 |
-| `eotTimeoutMs` | 5000 | 5000 |
-| Prompt, model, voice | same | same |
-| Scripts, pause lengths | same | same |
-| Expected behaviour | answers sooner, more likely to answer during a pause | waits longer, less likely to cut in |
+Today, PaceLab tests its own Cloudflare-based reference agent.
 
-## Methodology in brief
+A future version could support developers' existing Cloudflare voice agents and eventually selected third-party voice platforms.
 
-Six scenarios (fluent baseline, 2 s pause, 3 s pause, fillers, self-correction, two 2 s pauses), two runs each per mode, read by one person. A split request is recorded as an SDK fact; whether the agent replied too early is a human judgment. Rates use only trials judged Yes or No. Full protocol, label definitions and threats to validity: [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+### Test naturally
 
-## Getting started
+The current Workbench uses predefined scenarios because controlled experiments need comparable inputs.
 
-Requirements: Node 22 or newer, a Cloudflare account (Workers Free is enough).
+In a future natural-testing workflow, users would not need to choose a hesitation, pause, or correction scenario before speaking.
+
+PaceLab would analyze observed conversational behavior afterward, while retaining optional scripted benchmarks for reproducibility.
+
+### Analyze conversational behavior
+
+Potential future evaluations include:
+
+- Premature turn commitments.
+- Speech overlap and interruptions.
+- Hesitations and self-corrections.
+- Response latency.
+- Missed or misunderstood request details.
+
+Automated detection should identify possible issues and provide supporting evidence rather than claim that every conversational failure can be judged with certainty.
+
+### Detect regressions
+
+A longer-term goal is repeatable testing after an agent's configuration, prompt, model, or voice pipeline changes.
+
+Instead of asking whether a new configuration *feels* better, a developer could compare results against a known baseline.
+
+## 10. The next technical opportunity: Reproducible turn-taking tests
+
+The most focused next step is an audio-replay test harness for Cloudflare's voice SDK.
+
+A developer would provide recorded human speech and run it against multiple end-of-turn configurations.
+
+PaceLab could then compare:
+
+- Whether a turn was committed before the known end of the recorded request.
+- How long the system waited after the final word.
+- How often configurations produced premature turn commitments.
+- Whether a code or configuration change introduced a regression.
+
+Using identical recorded inputs would remove much of the variation introduced by manually repeating scripts.
+
+This would make PaceLab more useful as a developer testing utility, rather than only an interactive demonstration.
+
+A potential implementation could live as an open-source testing kit, an SDK example, or a developer workflow integrated with existing evaluation products.
+
+Those integration paths are hypotheses to validate with developers and platform teams.
+
+## 11. Where PaceLab fits in the ecosystem
+
+Cloudflare already provides the infrastructure and observability needed to build and operate real-time agents.
+
+Coval and other evaluation platforms address broader conversational testing, simulation, and monitoring.
+
+PaceLab does not aim to reproduce all of those capabilities.
+
+Its current focus is narrower:
+
+**A lightweight, reproducible way to investigate the behavior of Cloudflare's voice-agent pipeline and turn technical measurements into actionable developer experiments.**
+
+Whether this belongs in the Agents SDK examples, a standalone open-source tool, or a broader evaluation integration is an open product question.
+
+---
+
+## 12. Getting started
+
+Requirements:
+
+- Node.js 22 or newer.
+- A Cloudflare account.
+- Workers AI access.
+
+Workers AI has usage limits, including a daily free Neuron allowance. Live calls can consume that allowance.
+
+Clone the repository and install dependencies:
 
 ```sh
 npm ci
-npx wrangler login        # the AI binding always runs remotely, even in dev
-cp .dev.vars.example .dev.vars   # then set your own values
+npx wrangler login
+cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Checks:
+Configure the development secrets in `.dev.vars`.
+
+The Workers AI binding uses remote inference even during development.
+
+### Run checks
 
 ```sh
-npm run check   # TypeScript
-npm test        # unit tests (node --test)
+npm run check
+npm test
 npm run build
 ```
 
-Local API and browser smoke tests are in [docs/TESTING.md](docs/TESTING.md). They refuse to run against anything but localhost.
+The repository also includes local API and browser smoke tests.
 
-## Configuration
+Those tests use local or mocked environments and do not replace a real microphone-based production test.
 
-| Name | Kind | Purpose |
+See [Testing](docs/TESTING.md).
+
+## 13. Configuration
+
+| Name | Type | Purpose |
 |---|---|---|
-| `AI` | Workers AI binding | Flux, Gemma 4, Aura-1 |
-| `StandardVoiceAgent`, `PatientVoiceAgent` | Durable Objects | One instance per call |
-| `TrialStore` | Durable Object | Trials, call accounting, sign-in lockout |
-| `ASSETS` | Static assets | The React app |
-| `PACELAB_PASSPHRASE` | Secret | Sign-in passphrase |
-| `PACELAB_TOKEN_SECRET` | Secret | HMAC key for session tokens, separate from the passphrase |
+| `AI` | Workers AI binding | Model inference |
+| `StandardVoiceAgent` | Durable Object | Reference agent with threshold 0.70 |
+| `PatientVoiceAgent` | Durable Object | Reference agent with threshold 0.85 |
+| `TrialStore` | Durable Object | Experiment records, call accounting, authentication data |
+| `ASSETS` | Static assets | React frontend |
+| `PACELAB_PASSPHRASE` | Secret | Protected Workbench and Results access |
+| `PACELAB_TOKEN_SECRET` | Secret | Session token signing |
 
-Without both secrets every `/api` and `/agents` route returns 503, so nothing can spend Workers AI. Limits live in [`src/config.ts`](src/config.ts): 30 established calls a day, 90 attempts a day, 90-second calls.
+The two secrets must be configured for protected API and voice routes to function.
 
-## Deployment
+PaceLab's application-level limits are defined in [`src/config.ts`](src/config.ts):
 
-The repository is connected to Cloudflare Workers Builds. A push to `main` runs `npm run build` then `npx wrangler deploy`. Pushes to other branches run `npx wrangler preview`; the `previews` block in [`wrangler.jsonc`](wrangler.jsonc) gives previews no AI binding and no secrets, so a preview serves the page and the demo but cannot run calls or spend Workers AI.
+- 30 established calls per day.
+- 90 call attempts per day.
+- 90-second maximum call duration.
 
-Set the two secrets in the dashboard (Worker → Settings → Variables and Secrets) or with `npx wrangler secret put`.
+These are application safeguards, not guarantees that the Workers AI account's daily Neuron allowance will be sufficient.
 
-## Running a test
+## 14. Deployment
 
-1. Sign in. The Experiment panel shows progress, calls left today and the recommended next trial.
-2. Check the mode and scenario (the recommendation is pre-selected).
-3. Press **Start call**, wait for "Listening", then read the script. Hold each pause until its marker fills.
-4. If the agent cuts in, press **Cut me off**. The call ends by itself after the first reply (you can turn that off).
-5. Answer the four questions, choose Counted, and save. The matrix and report update.
+PaceLab is deployed through Cloudflare Workers Builds.
 
-If the call fails to start, PaceLab says why (for example, the Workers AI daily allocation is used up) and offers to record it as a technical failure, which never enters the experiment counts.
+Pushes to `main` run the application build and deploy the Worker.
 
-## Reading the results
+Non-main branches use Cloudflare preview deployments.
 
-- **[M]** manual judgment, **[SDK]** Agents SDK server timing, **[≈]** browser estimate.
-- A rate like `3/11 (27%) · 1 unknown` means 3 of the 11 trials judged Yes or No; the unknown is listed, not counted.
-- *Speech start → final transcript* includes your own speaking time and pauses. It is not latency.
-- *Final transcript → first audio* is mostly the model's start-up time and does not depend on the threshold.
-- The decision summary says *Insufficient evidence* until each mode has at least 6 judged trials, and never claims significance.
+Preview environments deliberately exclude Workers AI access and production secrets. They can display the interface and synthetic demo but cannot run real voice calls.
 
-## Current findings
+Production secrets must be configured in the Cloudflare dashboard or using Wrangler.
 
-The 24-trial experiment has not been run yet. One exploratory multi-pause run (Standard replied early, Patient waited) and the diagnosis of startup failures are in [docs/FINDINGS.md](docs/FINDINGS.md). SDK friction is logged in [docs/FRICTION.md](docs/FRICTION.md). The PM decision memo is in [docs/DECISION_MEMO.md](docs/DECISION_MEMO.md) and a two-minute walkthrough in [docs/DEMO.md](docs/DEMO.md).
+The deployed application is available at:
 
-## Known limitations
+https://pacelab.dakshkumar19860.workers.dev
 
-- **Workers AI free allocation.** 10,000 neurons a day. Flux bills for every minute a call is open, so the allocation covers roughly 20 short calls, fewer than the app's 30-call cap. Plan the 24 trials over one or two UTC days and keep auto-end on.
-- **One speaker, human timing.** Pauses are held by a person; the measured pauses are shown but not controlled. Recorded audio would remove this.
-- **False barge-in.** Any Flux speech start aborts the reply, and Flux sometimes detects speech in near-silence ([F7, F8](docs/FRICTION.md)). Record such trials as excluded.
-- **Perceived wait is approximate.** It comes from the browser's mic level.
-- **Microphone tests are manual.** Automated tests use mocks and a fake microphone; real voice calls must be checked by a person in Chrome.
+The public Overview and Demo pages do not require authentication.
 
-## Roadmap
+The Workbench and real experiment Results are protected because live calls consume the deployment owner's AI allocation.
 
-1. Run and publish the 24-trial matrix, then fill in the decision memo.
-2. Replay recorded audio so both modes hear identical input.
-3. Separate backchannels ("mm-hm") and corrections from real interruptions.
-4. More end-of-turn strategies, such as threshold plus timeout combinations.
+## 15. Running an evaluation
 
-## Contributing
+1. Sign in to the Workbench.
+2. Follow the recommended configuration and scenario.
+3. Start a voice call and wait for the Listening state.
+4. Read the request naturally, following the pause markers when applicable.
+5. Review the committed transcript and the agent's reply.
+6. Answer the evaluation questions.
+7. Save the trial using the appropriate status.
+8. Review the updated experiment in Results.
 
-Issues and pull requests are welcome. Keep the threshold the only difference between modes, keep manual judgments separate from measurements, and run `npm run check && npm test && npm run build` before opening a PR. Do not commit `.dev.vars` or any secret.
+The call can automatically end after the first agent reply to reduce Workers AI consumption.
 
-## License
+If the provider fails before the conversation starts, the attempt can be saved as a technical failure rather than counted as a conversational test.
 
-MIT; see [LICENSE](LICENSE). Copyright Daksh Kumar. The original Cloudflare Inc. notice is kept for the parts that came from the `cloudflare/agents-starter` template, as the MIT license requires.
+## 16. Reading the results
 
-## Privacy
+PaceLab's reporting system distinguishes:
 
-Only transcripts, labels and timings are stored. No audio is recorded. All test content is fictional.
+- Measured events.
+- Human judgments.
+- Browser estimates.
+- Successful trials.
+- Technical failures and excluded observations.
+
+Unknown judgments are displayed separately from Yes/No rates.
+
+A decision summary remains marked as Insufficient evidence until there are at least six judged trials per configuration.
+
+That threshold is a reporting safeguard, not proof of statistical significance.
+
+With a small sample, one speaker, and manually repeated requests, comparisons should be interpreted as exploratory rather than conclusive.
+
+For the full experimental protocol, see [Methodology](docs/METHODOLOGY.md).
+
+## 17. Known limitations
+
+### Experiment size
+
+The initial design uses 24 planned trials. This is useful for exploration but not sufficient to generalize across speakers, acoustic environments, and applications.
+
+### Manual speech variability
+
+Repeated spoken requests are not acoustically identical. Exact audio replay is a planned improvement.
+
+### Human evaluation
+
+Some conversational outcomes require context and judgment. A transcript split alone cannot establish whether an interruption was inappropriate.
+
+### Browser timing estimates
+
+Pause duration and perceived wait are approximate measurements.
+
+### SDK behavior
+
+The current voice pipeline may interrupt its own reply when Flux detects new speech. False speech-start events can complicate evaluation.
+
+### Workers AI quota
+
+The daily free allocation can block live calls. The application's call cap is independent of Workers AI's Neuron allowance.
+
+### Live test verification
+
+Automated checks cover application behavior using mocks and local tests. The complete live microphone workflow requires separate production verification.
+
+### External-agent support
+
+PaceLab does not currently connect directly to arbitrary customer voice agents.
+
+## 18. Roadmap
+
+### Near term
+
+1. Complete and document the controlled turn-taking experiment.
+2. Improve reproducibility with identical recorded-audio inputs.
+3. Measure premature commitments against end-of-turn waiting time.
+4. Investigate SDK-level improvements surfaced by developer testing.
+
+### Next
+
+5. Create a lightweight, automated turn-taking benchmark for Cloudflare voice agents.
+6. Add repeatable configuration comparisons and regression reports.
+7. Explore natural-conversation analysis without mandatory scenario selection.
+
+### Longer term
+
+8. Evaluate developers' own Cloudflare agents.
+9. Support selected external-agent integrations or conversation imports.
+10. Explore integration into automated developer testing and release workflows.
+
+The roadmap represents proposed development directions, not shipped functionality.
+
+---
+
+## 19. Project documentation
+
+| Document | Purpose |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Components, session flow, storage and security |
+| [Methodology](docs/METHODOLOGY.md) | Experimental design and validity limitations |
+| [Testing](docs/TESTING.md) | Automated checks and manual verification |
+| [Findings](docs/FINDINGS.md) | Observations and evidence status |
+| [Developer Friction](docs/FRICTION.md) | SDK and infrastructure issues encountered |
+| [Decision Memo](docs/DECISION_MEMO.md) | How results should inform decisions |
+| [Demo Guide](docs/DEMO.md) | Short project walkthrough |
+
+## 20. Privacy and data handling
+
+PaceLab processes microphone audio for live speech recognition but does not store audio recordings.
+
+It stores experiment-related information including transcripts, agent responses, timing measurements, trial metadata, evaluation labels, and technical-failure details.
+
+The controlled benchmark uses fictional appointment requests. Any successfully measured live interactions are real experiment observations.
+
+The public demo uses synthetic data and is separate from saved live experiment results.
+
+Future recorded-audio replay would require appropriate consent, storage, retention, and deletion controls.
+
+## 21. Contributing
+
+Contributions, issues, and feedback are welcome.
+
+Please preserve the distinction between measurements and human judgments, maintain accurate experiment reporting, and avoid introducing uncontrolled differences between configurations.
+
+Before opening a pull request:
+
+```sh
+npm run check
+npm test
+npm run build
+```
+
+Do not commit `.dev.vars`, API credentials, or deployment secrets.
+
+## 22. License
+
+MIT License. See [LICENSE](LICENSE).
+
+Copyright Daksh Kumar.
+
+The original Cloudflare Inc. copyright and license notices are preserved for material derived from the `cloudflare/agents-starter` template.
+
+---
+
+### The question behind PaceLab
+
+Cloudflare makes it easier to build and deploy voice agents.
+
+Can we make testing their conversational reliability just as natural a part of the developer workflow?
+
+PaceLab is an open-source exploration of that question.
+
+*PaceLab is an independent project built on Cloudflare's developer platform, not an official Cloudflare product.*
