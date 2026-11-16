@@ -445,8 +445,6 @@ What could this look like for a developer already using Cloudflare? Imagine open
 
 The goal would be to make **testing conversational reliability a natural part of the developer workflow**, without needing to build a separate evaluation harness for every project.
 
-![PaceLab proposed Voice Testing feature in the Cloudflare Agent tracing dashboard](docs/images/pacelab-cloudflare-concept.png)
-
 *Product concept — independent illustration of how PaceLab could fit into Cloudflare's developer dashboard. Not an existing or announced Cloudflare feature or official partnership. The agent, 24-trial results, 27% / 9% values, charts, and buttons are illustrative; these are not PaceLab's measured findings or currently implemented integrations.*
 
 This interface is one possible direction, not a finalized feature specification. The most useful next step would be to validate the need for a small, reproducible turn-taking benchmark with Cloudflare developers and the team building the voice SDK.
