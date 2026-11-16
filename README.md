@@ -451,6 +451,9 @@ The goal would be to make **testing conversational reliability a natural part of
 
 This interface is one possible direction, not a finalized feature specification. The most useful next step would be to validate the need for a small, reproducible turn-taking benchmark with Cloudflare developers and the team building the voice SDK.
 
+<img width="1755" height="896" alt="Cloudflare Agent Tracing_ PaceLab Voice Testing" src="https://github.com/user-attachments/assets/7ebdffb5-bd9e-4347-ac75-771e23367b69" />
+
+
 ## 11. Where PaceLab fits in the ecosystem
 
 Cloudflare already provides the infrastructure and observability needed to build and operate real-time agents.
